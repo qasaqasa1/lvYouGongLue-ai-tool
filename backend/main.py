@@ -18,7 +18,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from services.ai_service import generate_outline, generate_article, generate_images
 from services.docx_service import create_docx
-from models import OutlineRequest, OutlineResponse, GenerateContentRequest, GenerateContentResponse, OutlineNode, ImageRequest, ImageResponse
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -47,9 +51,12 @@ async def read_root(request: Request):
 @app.post("/api/generate-outline", response_model=OutlineResponse)
 async def api_generate_outline(request: OutlineRequest):
     try:
+        logger.info(f"Generating outline for: {request.location}")
         outline = generate_outline(request.location, request.days, request.budget)
+        logger.info(f"Successfully generated outline for: {request.location}")
         return OutlineResponse(location=request.location, outline=outline)
     except Exception as e:
+        logger.error(f"Error generating outline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 import re
@@ -66,6 +73,7 @@ class SingleContentRequest(BaseModel):
 @app.post("/api/generate-single-content", response_model=GenerateContentResponse)
 async def api_generate_single_content(request: SingleContentRequest):
     try:
+        logger.info(f"Starting content generation for: {request.location} - {request.node.title}")
         output_dir = "outputs"
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -81,11 +89,13 @@ async def api_generate_single_content(request: SingleContentRequest):
         
         html_content = f'<div id="node-{request.node.id}" class="mb-8 scroll-mt-4">\n{content}\n</div>\n'
         
+        logger.info(f"Finished content generation for: {request.node.title}")
         return GenerateContentResponse(
             html_content=html_content,
             download_url=f"/outputs/{os.path.basename(filepath)}"
         )
     except Exception as e:
+        logger.error(f"Error generating single content: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/generate-content", response_model=GenerateContentResponse)

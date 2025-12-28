@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: ai-travel-guide
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 2 -k uvicorn.workers.UvicornWorker backend.main:app --timeout 180 --keep-alive 5 --log-level debug
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      - key: PORT
+        value: 8000
