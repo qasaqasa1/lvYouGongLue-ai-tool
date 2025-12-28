@@ -8,17 +8,39 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Initialize OpenAI client
-# Using environment variable OPENAI_API_KEY
-client = None
-if os.getenv("OPENAI_API_KEY"):
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# --- Initialize separate clients for text and images ---
+text_client = None
+image_client = None
+
+# Text Configuration (Default to OpenAI if specific TEXT_* vars not set)
+text_key = os.getenv("TEXT_API_KEY") or os.getenv("OPENAI_API_KEY")
+text_url = os.getenv("TEXT_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+text_model = os.getenv("TEXT_MODEL", "gpt-4o-mini")
+
+if text_key:
+    # Use custom base_url if provided (e.g., for ZhipuAI), otherwise default to OpenAI official
+    if text_url:
+        text_client = OpenAI(api_key=text_key, base_url=text_url)
+    else:
+        text_client = OpenAI(api_key=text_key)
+
+# Image Configuration (Default to OpenAI if specific IMAGE_* vars not set)
+image_key = os.getenv("IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
+image_url = os.getenv("IMAGE_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+image_model = os.getenv("IMAGE_MODEL", "dall-e-3")
+
+if image_key:
+    if image_url:
+        image_client = OpenAI(api_key=image_key, base_url=image_url)
+    else:
+        image_client = OpenAI(api_key=image_key)
 
 def generate_outline(location: str, days: int = None, budget: str = None) -> List[OutlineNode]:
     """
-    Generates a travel outline for the given location using OpenAI.
+    Generates a travel outline for the given location using the text client.
+    Optimized for JSON compatibility with ZhipuAI and other models.
     """
-    if not client:
+    if not text_client:
         # Fallback to mock data if no API key
         print(f"No API key found. Generating mock outline for {location}")
         return [
@@ -48,43 +70,46 @@ def generate_outline(location: str, days: int = None, budget: str = None) -> Lis
     - level: 1 for main headings, 2 for subheadings
     - children: list of sub-nodes
     
-    Return ONLY a valid JSON array of OutlineNode objects.
+    Return ONLY a valid JSON object containing an 'outline' key with the array of OutlineNode objects.
     Example structure:
-    [
-      {{"id": "1", "title": "目的地简介", "level": 1, "children": [
-        {{"id": "1-1", "title": "最佳旅游时间", "level": 2, "children": []}}
-      ]}}
-    ]
+    {{
+      "outline": [
+        {{"id": "1", "title": "目的地简介", "level": 1, "children": [
+          {{"id": "1-1", "title": "最佳旅游时间", "level": 2, "children": []}}
+        ]}}
+      ]
+    }}
     """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        response = text_client.chat.completions.create(
+            model=text_model,
             messages=[
-                {"role": "system", "content": "You are a professional travel planner. Return only JSON."},
+                {"role": "system", "content": "You are a professional travel planner. Return ONLY JSON."},
                 {"role": "user", "content": prompt}
             ],
             response_format={ "type": "json_object" }
         )
         data = json.loads(response.choices[0].message.content)
-        # The response might be wrapped in an object like {"outline": [...]} or just the array
+        
+        # Extract outline from the expected wrapper
         if isinstance(data, dict):
             if "outline" in data:
                 nodes_data = data["outline"]
             else:
-                # If it's a dict but not "outline", maybe it's the list itself in a wrapper or just one key
+                # Fallback if model didn't use the wrapper but returned a dict with the list
                 nodes_data = list(data.values())[0] if isinstance(list(data.values())[0], list) else []
         else:
             nodes_data = data
 
         return [OutlineNode(**node) for node in nodes_data]
     except Exception as e:
-        print(f"Error calling OpenAI for outline: {e}")
+        print(f"Error calling AI for outline: {e}")
         return []
 
 def generate_article(location: str, node: OutlineNode) -> str:
     """
-    Generates content for a specific outline node using a specific persona and detailed requirements.
+    Generates content for a specific outline node using the text client.
     """
     persona = """
     # 角色
@@ -103,14 +128,14 @@ def generate_article(location: str, node: OutlineNode) -> str:
     4. **文风**：亲切活泼，高度口语化与网络化，多用 Emoji。
     """
 
-    if not client:
-        # Return mock data as fallback (already implemented in the previous code)
+    if not text_client:
+        # Return mock data as fallback
         return f"""
         <div class="article-container p-6 bg-white rounded-lg shadow-sm mb-12 border border-gray-100">
             <h2 class="text-3xl font-bold text-blue-900 mb-6 pb-2 border-b-2 border-blue-100">{node.title}</h2>
             <div class="prose max-w-none text-gray-700 leading-relaxed">
                 <p class="mb-4">【演示模式 - 未配置 API Key】这里是关于 <strong>{location}</strong> - <strong>{node.title}</strong> 的精彩内容...</p>
-                <p>请在部署环境中配置 <code>OPENAI_API_KEY</code> 以获取 AI 生成的真实内容！✨</p>
+                <p>请在部署环境中配置 <code>TEXT_API_KEY</code> 以获取 AI 生成的真实内容！✨</p>
             </div>
         </div>
         """
@@ -135,8 +160,8 @@ def generate_article(location: str, node: OutlineNode) -> str:
     """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        response = text_client.chat.completions.create(
+            model=text_model,
             messages=[
                 {"role": "system", "content": "You are a travel expert writing in HTML."},
                 {"role": "user", "content": prompt}
@@ -148,9 +173,9 @@ def generate_article(location: str, node: OutlineNode) -> str:
 
 def generate_images(location: str, count: int, type: str, content: str = None) -> List[str]:
     """
-    Generates image URLs for the given location using DALL-E 3 with specific prompt logic.
+    Generates image URLs for the given location using the image client.
     """
-    if not client:
+    if not image_client:
         # Mock implementation for images
         images = []
         base_url = "https://placehold.co/600x800"
@@ -196,13 +221,23 @@ def generate_images(location: str, count: int, type: str, content: str = None) -
             """
 
         try:
-            response = client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                size="1024x1792", # This is roughly 9:16 or 3:4-ish tall
-                quality="standard",
-                n=1
-            )
+            # Prepare arguments for image generation
+            gen_args = {
+                "model": image_model,
+                "prompt": prompt,
+                "n": 1
+            }
+            
+            # Handle model-specific parameters
+            if "cogview" in image_model.lower():
+                # ZhipuAI Cogview models typically support 1024x1024
+                gen_args["size"] = "1024x1024"
+            else:
+                # Default for DALL-E 3
+                gen_args["size"] = "1024x1792"
+                gen_args["quality"] = "standard"
+
+            response = image_client.images.generate(**gen_args)
             urls.append(response.data[0].url)
         except Exception as e:
             print(f"Error generating image: {e}")
