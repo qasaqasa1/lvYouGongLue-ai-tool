@@ -60,65 +60,141 @@ def generate_outline(location: str, days: int = None, budget: str = None) -> Lis
         ]
 
     prompt = f"""
-    Create a professional travel guide outline for {location}.
+    You are a professional travel planner. Create a highly detailed travel guide outline for {location}.
     {'Duration: ' + str(days) + ' days.' if days else ''}
     {'Budget level: ' + budget if budget else ''}
     
-    The outline MUST follow these exact 9 chapters. Chapter names can be colloquial and social-media style (小红书风格):
-    1. 目的地概览与核心亮点 (Provide 3-4 subheadings)
-    2. 主题路线推荐 (Recommend based on local characteristics, 6-7 subheadings)
-    3. 本地专题体验 (List famous local tourism projects, 6-7 subheadings)
-    4. 必访景点分块介绍 (List all popular attractions or scenic areas as subheadings)
-    5. 交通与到达方式 (Provide 2-4 subheadings)
-    6. 美食与餐厅建议 (Introduce local specialties and list specific local restaurants, 9-10 subheadings)
-    7. 住宿推荐 (Categorize different options, 3-4 subheadings)
-    8. 费用预算与季节建议 (Provide 2-3 subheadings)
-    9. 文化礼仪与实用贴士 (Include taboos, safety tips, etc.)
-
-    The outline should be structured as a list of nodes. Each node has:
-    - id: unique string (e.g., "1", "1-1")
-    - title: name of the section in Chinese
-    - level: 1 for main headings, 2 for subheadings
-    - children: list of sub-nodes
+    The outline MUST consist of EXACTLY these 9 chapters in order. Do not skip any. Do not add others. 
+    Chapter names should be catchy and social-media style (小红书风格).
     
-    Return ONLY a valid JSON object containing an 'outline' key with the array of OutlineNode objects.
-    Example structure:
-    {{
-      "outline": [
-        {{"id": "1", "title": "🌟 目的地概览与核心亮点", "level": 1, "children": [
-          {{"id": "1-1", "title": "📍 地理坐标与气候初印象", "level": 2, "children": []}},
-          ...
-        ]}},
-        ...
-      ]
-    }}
+    REQUIRED CHAPTERS AND SUBHEADING COUNTS:
+    1. 目的地概览与核心亮点 (Provide 3-4 subheadings)
+    2. 主题路线推荐 (Based on local characteristics, 6-7 subheadings)
+    3. 本地专题体验 (Famous local projects, 6-7 subheadings)
+    4. 必访景点分块介绍 (All popular attractions/scenic areas as subheadings)
+    5. 交通与到达方式 (2-4 subheadings)
+    6. 美食与餐厅建议 (Local specialties and specific restaurants, 9-10 subheadings)
+    7. 住宿推荐 (Categorized by area or type, 3-4 subheadings)
+    8. 费用预算与季节建议 (2-3 subheadings)
+    9. 文化礼仪与实用贴士 (Taboos, safety, etc., 2-3 subheadings)
+    
+    JSON STRUCTURE REQUIREMENTS:
+    Return a JSON object with a key "outline" containing an array of nodes.
+    Each node MUST have:
+    - "id": string (e.g., "1", "1-1")
+    - "title": string (Chinese)
+    - "level": integer (1 for chapters, 2 for subheadings)
+    - "children": array of sub-nodes (empty array if no subheadings)
+    
+    Return ONLY the JSON object. No conversational text.
     """
 
     try:
-        response = text_client.chat.completions.create(
-            model=text_model,
-            messages=[
-                {"role": "system", "content": "You are a professional travel planner. Return ONLY JSON."},
+        # Prepare API call arguments
+        kwargs = {
+            "model": text_model,
+            "messages": [
+                {"role": "system", "content": "You are a professional travel planner that only outputs JSON."},
                 {"role": "user", "content": prompt}
-            ],
-            response_format={ "type": "json_object" }
-        )
-        data = json.loads(response.choices[0].message.content)
+            ]
+        }
+        
+        # Only add response_format if it's likely supported (OpenAI or ZhipuAI GLM-4)
+        if "gpt" in text_model.lower() or "glm-4" in text_model.lower():
+            kwargs["response_format"] = { "type": "json_object" }
+
+        response = text_client.chat.completions.create(**kwargs)
+        raw_content = response.choices[0].message.content.strip()
+        print(f"DEBUG: AI Outline Response: {raw_content}")
+        
+        # Robust JSON parsing: try to find the first '{' and last '}'
+        try:
+            # Remove markdown code blocks if present
+            if raw_content.startswith("```"):
+                lines = raw_content.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                raw_content = "\n".join(lines).strip()
+            
+            # Find the actual JSON object
+            start_idx = raw_content.find('{')
+            end_idx = raw_content.rfind('}')
+            if start_idx != -1 and end_idx != -1:
+                json_str = raw_content[start_idx:end_idx+1]
+                data = json.loads(json_str)
+            else:
+                data = json.loads(raw_content)
+        except Exception as json_err:
+            print(f"JSON parsing failed: {json_err}")
+            # Try to see if it's a list directly
+            start_idx = raw_content.find('[')
+            end_idx = raw_content.rfind(']')
+            if start_idx != -1 and end_idx != -1:
+                json_str = raw_content[start_idx:end_idx+1]
+                data = json.loads(json_str)
+            else:
+                raise json_err
         
         # Extract outline from the expected wrapper
+        nodes_data = []
         if isinstance(data, dict):
             if "outline" in data:
                 nodes_data = data["outline"]
             else:
-                # Fallback if model didn't use the wrapper but returned a dict with the list
-                nodes_data = list(data.values())[0] if isinstance(list(data.values())[0], list) else []
-        else:
+                # Fallback: try to find any list in the dict
+                for value in data.values():
+                    if isinstance(value, list):
+                        nodes_data = value
+                        break
+        elif isinstance(data, list):
             nodes_data = data
 
-        return [OutlineNode(**node) for node in nodes_data]
+        def validate_nodes(nodes, parent_id=""):
+            validated = []
+            for i, node in enumerate(nodes):
+                if not isinstance(node, dict): continue
+                
+                # Ensure basic fields exist
+                title = node.get("title") or node.get("name") or "未命名章节"
+                level = node.get("level") or (1 if not parent_id else 2)
+                node_id = node.get("id") or (f"{parent_id}-{i+1}" if parent_id else str(i+1))
+                
+                children_data = node.get("children") or node.get("subheadings") or []
+                children = validate_nodes(children_data, node_id) if isinstance(children_data, list) else []
+                
+                validated.append(OutlineNode(
+                    id=str(node_id),
+                    title=str(title),
+                    level=int(level),
+                    children=children
+                ))
+            return validated
+
+        return validate_nodes(nodes_data)
     except Exception as e:
         print(f"Error calling AI for outline: {e}")
-        return []
+        import traceback
+        traceback.print_exc()
+        
+        # Last resort fallback to mock data so the UI isn't empty
+        print(f"Falling back to mock data for {location}")
+        return [
+            OutlineNode(id="1", title="目的地概览与核心亮点", level=1, children=[
+                OutlineNode(id="1-1", title="地理与气候特征", level=2, children=[]),
+                OutlineNode(id="1-2", title="历史文化背景", level=2, children=[]),
+                OutlineNode(id="1-3", title="必体验的3大特色", level=2, children=[]),
+            ]),
+            OutlineNode(id="2", title="主题路线推荐", level=1, children=[
+                OutlineNode(id="2-1", title="经典3日游路线", level=2, children=[]),
+                OutlineNode(id="2-2", title="深度文化探索线", level=2, children=[]),
+            ]),
+            OutlineNode(id="3", title="美食与餐厅建议", level=1, children=[
+                OutlineNode(id="3-1", title="当地必吃特色菜", level=2, children=[]),
+                OutlineNode(id="3-2", title="高性价比餐厅推荐", level=2, children=[]),
+            ])
+        ]
 
 def generate_article(location: str, node: OutlineNode) -> str:
     """
