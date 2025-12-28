@@ -116,14 +116,7 @@
                     </a>
                 </div>
 
-                <!-- Loading Overlay -->
-                <div id="loading-overlay" class="absolute inset-0 bg-white/95 z-20 flex flex-col items-center justify-center hidden backdrop-blur-sm">
-                    <div class="animate-spin w-12 h-12 text-blue-600 mb-4">
-                        <i data-lucide="loader-2" class="w-12 h-12"></i>
-                    </div>
-                    <h3 class="text-lg font-bold text-gray-800 mb-1">正在撰写攻略...</h3>
-                    <p class="text-xs text-gray-500 animate-pulse">AI 正在为您生成详细内容</p>
-                </div>
+                <!-- Loading Overlay Removed -->
             </div>
 
             <!-- Right Panel: AI Image Generation -->
@@ -195,7 +188,8 @@
             noteImages: [],
             productImages: [],
             contents: {}, // node.id -> html_content
-            selectedNodeId: null
+            selectedNodeId: null,
+            generatingNodes: new Set()
         };
 
         // DOM Elements
@@ -447,8 +441,27 @@
         }
 
         function renderSelectedContent() {
-            if (!currentState.selectedNodeId || !currentState.contents[currentState.selectedNodeId]) {
+            if (!currentState.selectedNodeId) {
                 contentDisplay.innerHTML = '<div class="text-center text-gray-400 py-20">请选择左侧标题查看内容</div>';
+                return;
+            }
+
+            if (currentState.generatingNodes.has(currentState.selectedNodeId)) {
+                contentDisplay.innerHTML = `
+                    <div class="flex flex-col items-center justify-center py-20 text-center">
+                        <div class="animate-spin w-10 h-10 text-blue-600 mb-4">
+                            <i data-lucide="loader-2" class="w-10 h-10"></i>
+                        </div>
+                        <h3 class="text-lg font-medium text-gray-800">正在撰写本章节...</h3>
+                        <p class="text-sm text-gray-500">AI 正在构思精彩内容，请稍候</p>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+            
+            if (!currentState.contents[currentState.selectedNodeId]) {
+                contentDisplay.innerHTML = '<div class="text-center text-gray-400 py-20">该章节暂无内容，请点击生成或刷新</div>';
                 return;
             }
             
@@ -521,6 +534,14 @@
                 badge.className = 'text-[10px] font-mono text-gray-400 bg-gray-100 px-1 rounded group-hover:bg-white';
                 badge.innerText = 'H' + node.level;
                 
+                // Refresh/Loading Icon
+                const statusWrapper = document.createElement('div');
+                statusWrapper.className = 'flex items-center';
+                
+                if (currentState.generatingNodes.has(node.id)) {
+                    statusWrapper.innerHTML = '<i data-lucide="loader-2" class="w-3 h-3 text-blue-500 animate-spin"></i>';
+                }
+
                 // Editable Input
                 const input = document.createElement('input');
                 input.value = node.title;
@@ -598,6 +619,7 @@
                 }
 
                 contentEl.appendChild(badge);
+                contentEl.appendChild(statusWrapper);
                 contentEl.appendChild(input);
                 contentEl.appendChild(actionsWrapper);
                 nodeWrapper.appendChild(contentEl);
@@ -694,67 +716,74 @@
         };
 
         async function generateContent() {
-            loadingOverlay.classList.remove('hidden');
+            if (currentState.generatingNodes.size > 0) return; // Already generating
+
+            // Reset contents and set state
+            currentState.contents = {};
+            currentState.hasGeneratedContent = true;
             
-            try {
-                const res = await fetch('/api/generate-content', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(currentState)
-                });
-                
-                if (!res.ok) throw new Error('Generation Failed');
-                
-                const data = await res.json();
-                
-                // Update UI
-                contentPlaceholder.classList.add('hidden');
-                rightScrollArea.classList.remove('hidden');
-                contentActions.classList.remove('hidden');
+            // UI Switch: Show content area immediately
+            contentPlaceholder.classList.add('hidden');
+            rightScrollArea.classList.remove('hidden');
+            contentActions.classList.remove('hidden');
+            
+            // Hide main download button until all done (optional, but cleaner)
+            const mainDownloadBtn = document.getElementById('download-btn');
+            mainDownloadBtn.classList.add('hidden');
 
-                // Parse and store contents
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(data.html_content, 'text/html');
-                const nodes = doc.querySelectorAll('div[id^="node-"]');
-                
-                currentState.contents = {};
+            // Collect all nodes to generate (including children)
+            const allNodes = [];
+            const collectNodes = (nodes) => {
                 nodes.forEach(n => {
-                    const id = n.id.replace('node-', '');
-                    currentState.contents[id] = n.outerHTML;
+                    allNodes.push(n);
+                    if (n.children) collectNodes(n.children);
                 });
-                
-                // Map individual downloads back to nodes
-                let firstNodeId = null;
-                if (data.node_downloads) {
-                    const updateNodeUrls = (nodes) => {
-                        nodes.forEach(n => {
-                            if (!firstNodeId) firstNodeId = n.id;
-                            if (data.node_downloads[n.id]) {
-                                n.download_url = data.node_downloads[n.id];
-                            }
-                            if (n.children) updateNodeUrls(n.children);
-                        });
-                    };
-                    updateNodeUrls(currentState.outline);
-                }
+            };
+            collectNodes(currentState.outline);
 
-                // Setup Download
-                const downloadBtn = document.getElementById('download-btn');
-                downloadBtn.href = data.download_url;
-                downloadBtn.download = `${currentState.location}_guide.zip`;
-                
-                currentState.hasGeneratedContent = true;
-                
-                // Select first node
-                if (firstNodeId) {
-                    selectNode(firstNodeId);
-                }
-
-            } catch (err) {
-                alert('生成失败: ' + err.message);
-            } finally {
-                loadingOverlay.classList.add('hidden');
+            // Select first node immediately
+            if (allNodes.length > 0) {
+                selectNode(allNodes[0].id);
             }
+
+            // Generate one by one (or in small batches)
+            for (const node of allNodes) {
+                currentState.generatingNodes.add(node.id);
+                renderOutline(); // Update UI to show spinner
+                
+                try {
+                    const res = await fetch('/api/generate-single-content', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            location: currentState.location,
+                            node: node
+                        })
+                    });
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        currentState.contents[node.id] = data.html_content;
+                        node.download_url = data.download_url;
+                        
+                        // If this node is currently selected, refresh display
+                        if (currentState.selectedNodeId === node.id) {
+                            renderSelectedContent();
+                        }
+                    }
+                } catch (err) {
+                    console.error(`Failed to generate ${node.title}:`, err);
+                } finally {
+                    currentState.generatingNodes.delete(node.id);
+                    renderOutline(); // Remove spinner
+                }
+            }
+            
+            // After all done
+            mainDownloadBtn.classList.remove('hidden');
+            // Note: The main ZIP download is not automatically updated here 
+            // as we are generating individual files. 
+            // Users can use the individual download icons in the outline.
         }
 
         document.getElementById('confirm-generate-btn').addEventListener('click', generateContent);

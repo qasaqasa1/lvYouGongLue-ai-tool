@@ -64,6 +64,17 @@ def generate_outline(location: str, days: int = None, budget: str = None) -> Lis
     {'Duration: ' + str(days) + ' days.' if days else ''}
     {'Budget level: ' + budget if budget else ''}
     
+    The outline MUST follow these exact 9 chapters. Chapter names can be colloquial and social-media style (小红书风格):
+    1. 目的地概览与核心亮点 (Provide 3-4 subheadings)
+    2. 主题路线推荐 (Recommend based on local characteristics, 6-7 subheadings)
+    3. 本地专题体验 (List famous local tourism projects, 6-7 subheadings)
+    4. 必访景点分块介绍 (List all popular attractions or scenic areas as subheadings)
+    5. 交通与到达方式 (Provide 2-4 subheadings)
+    6. 美食与餐厅建议 (Introduce local specialties and list specific local restaurants, 9-10 subheadings)
+    7. 住宿推荐 (Categorize different options, 3-4 subheadings)
+    8. 费用预算与季节建议 (Provide 2-3 subheadings)
+    9. 文化礼仪与实用贴士 (Include taboos, safety tips, etc.)
+
     The outline should be structured as a list of nodes. Each node has:
     - id: unique string (e.g., "1", "1-1")
     - title: name of the section in Chinese
@@ -74,9 +85,11 @@ def generate_outline(location: str, days: int = None, budget: str = None) -> Lis
     Example structure:
     {{
       "outline": [
-        {{"id": "1", "title": "目的地简介", "level": 1, "children": [
-          {{"id": "1-1", "title": "最佳旅游时间", "level": 2, "children": []}}
-        ]}}
+        {{"id": "1", "title": "🌟 目的地概览与核心亮点", "level": 1, "children": [
+          {{"id": "1-1", "title": "📍 地理坐标与气候初印象", "level": 2, "children": []}},
+          ...
+        ]}},
+        ...
       ]
     }}
     """
